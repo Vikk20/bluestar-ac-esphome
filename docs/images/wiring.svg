@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 470" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <title>Wiring: Blue Star AC Wi-Fi header to ESP32-C3 SuperMini</title>
+  <rect width="860" height="470" rx="14" fill="#ffffff"/>
+  <!-- AC header -->
+  <rect x="30" y="60" width="200" height="350" rx="10" fill="#e8f1fb" stroke="#1f5fa8" stroke-width="2"/>
+  <text x="130" y="40" text-anchor="middle" font-weight="700" fill="#1f5fa8">AC display board</text>
+  <text x="130" y="85" text-anchor="middle" font-size="12" fill="#1f5fa8">4-pin Wi-Fi header</text>
+  <g font-weight="600" fill="#1b1b1b">
+    <rect x="150" y="105" width="80" height="36" rx="6" fill="#ffffff" stroke="#1f5fa8"/><text x="190" y="128" text-anchor="middle">R_WIFI</text>
+    <rect x="150" y="225" width="80" height="36" rx="6" fill="#ffffff" stroke="#1f5fa8"/><text x="190" y="248" text-anchor="middle">T_WIFI</text>
+    <rect x="150" y="295" width="80" height="36" rx="6" fill="#ffffff" stroke="#1f5fa8"/><text x="190" y="318" text-anchor="middle">GND</text>
+    <rect x="150" y="365" width="80" height="36" rx="6" fill="#ffffff" stroke="#1f5fa8"/><text x="190" y="388" text-anchor="middle">5V</text>
+  </g>
+  <g font-size="12" fill="#555">
+    <text x="45" y="128">AC TX · 5 V</text>
+    <text x="45" y="248">AC RX</text>
+    <text x="45" y="318">ground</text>
+    <text x="45" y="388">supply</text>
+  </g>
+  <!-- ESP -->
+  <rect x="630" y="60" width="200" height="350" rx="10" fill="#eef7ee" stroke="#2e7d32" stroke-width="2"/>
+  <text x="730" y="40" text-anchor="middle" font-weight="700" fill="#2e7d32">ESP32-C3 SuperMini</text>
+  <g font-weight="600" fill="#1b1b1b">
+    <rect x="630" y="105" width="90" height="36" rx="6" fill="#ffffff" stroke="#2e7d32"/><text x="675" y="128" text-anchor="middle">GPIO3</text>
+    <rect x="630" y="225" width="90" height="36" rx="6" fill="#ffffff" stroke="#2e7d32"/><text x="675" y="248" text-anchor="middle">GPIO4</text>
+    <rect x="630" y="295" width="90" height="36" rx="6" fill="#ffffff" stroke="#2e7d32"/><text x="675" y="318" text-anchor="middle">GND</text>
+    <rect x="630" y="365" width="90" height="36" rx="6" fill="#ffffff" stroke="#2e7d32"/><text x="675" y="388" text-anchor="middle">5V</text>
+  </g>
+  <g font-size="12" fill="#555">
+    <text x="735" y="128">UART RX</text>
+    <text x="735" y="248">UART TX</text>
+    <text x="735" y="318">ground</text>
+    <text x="735" y="388">from AC only</text>
+  </g>
+  <!-- R_WIFI -> divider -> GPIO3 -->
+  <g stroke="#1b1b1b" stroke-width="2.5" fill="none">
+    <line x1="230" y1="123" x2="300" y2="123"/>
+    <rect x="300" y="111" width="80" height="24" rx="4" fill="#fff7e0" stroke="#b26a00"/>
+    <line x1="380" y1="123" x2="630" y2="123"/>
+    <circle cx="500" cy="123" r="4" fill="#1b1b1b"/>
+    <line x1="500" y1="123" x2="500" y2="150"/>
+    <rect x="488" y="150" width="24" height="56" rx="4" fill="#fff7e0" stroke="#b26a00"/>
+    <line x1="500" y1="206" x2="500" y2="225"/>
+    <line x1="486" y1="225" x2="514" y2="225"/><line x1="491" y1="231" x2="509" y2="231"/><line x1="496" y1="237" x2="504" y2="237"/>
+  </g>
+  <text x="340" y="127" text-anchor="middle" font-size="12" font-weight="700" fill="#b26a00">5 kΩ</text>
+  <text x="340" y="102" text-anchor="middle" font-size="11" fill="#777">2 × 10 kΩ ∥</text>
+  <text x="522" y="183" font-size="12" font-weight="700" fill="#b26a00">10 kΩ</text>
+  <text x="522" y="199" font-size="11" fill="#777">to GND</text>
+  <text x="560" y="114" text-anchor="middle" font-size="11" fill="#2e7d32">≈ 3.3 V</text>
+  <!-- T_WIFI -> GPIO4 -->
+  <g stroke="#1b1b1b" stroke-width="2.5" fill="none">
+    <line x1="230" y1="243" x2="630" y2="243"/>
+    <line x1="580" y1="243" x2="580" y2="262" stroke-dasharray="5 4" stroke="#888"/>
+  </g>
+  <text x="330" y="236" text-anchor="middle" font-size="12" fill="#555">direct (3.3 V logic is accepted)</text>
+  <text x="572" y="266" text-anchor="end" font-size="11" fill="#888">optional 4.7–10 kΩ</text>
+  <text x="572" y="279" text-anchor="end" font-size="11" fill="#888">pull-up to 3.3 V</text>
+  <!-- GND, 5V -->
+  <g stroke="#1b1b1b" stroke-width="2.5"><line x1="230" y1="313" x2="630" y2="313"/></g>
+  <g stroke="#c62828" stroke-width="2.5"><line x1="230" y1="383" x2="630" y2="383"/></g>
+  <text x="430" y="375" text-anchor="middle" font-size="12" fill="#c62828" font-weight="600">never connect USB while powered from the AC</text>
+  <text x="430" y="450" text-anchor="middle" font-size="12" fill="#555">Header labels are from the module's point of view: R_WIFI = the AC transmits · 9600 baud 8N1</text>
+</svg>

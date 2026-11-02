@@ -1,0 +1,127 @@
+# Home Assistant package for one Blue Star AC running this ESPHome firmware.
+# Install: put this file in <config>/packages/ and add to configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# Entity IDs assume the ESPHome friendly_name "Blue Star AC" (climate.blue_star_ac, sensor.blue_star_ac_*).
+# For a second AC, copy the file and search/replace "blue_star_ac" with its prefix.
+
+utility_meter:
+  # Daily on-time and compressor time from the AC's own lifetime counters
+  blue_star_ac_runtime_daily:
+    name: Blue Star AC runtime today
+    source: sensor.blue_star_ac_runtime
+    cycle: daily
+  blue_star_ac_compressor_daily:
+    name: Blue Star AC compressor runtime today
+    source: sensor.blue_star_ac_compressor_runtime
+    cycle: daily
+
+template:
+  - sensor:
+      # Share of on-time the compressor actually ran (inverter ACs coast once the room is at target)
+      - name: Blue Star AC compressor duty today
+        unique_id: blue_star_ac_compressor_duty_today
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:percent
+        state: >-
+          {% set on = states('sensor.blue_star_ac_runtime_today') | float(0) %}
+          {{ (states('sensor.blue_star_ac_compressor_runtime_today') | float(0) / on * 100) | round(0) if on > 0 else 0 }}
+      - name: Blue Star AC compressor duty lifetime
+        unique_id: blue_star_ac_compressor_duty_lifetime
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:percent-outline
+        state: >-
+          {{ (states('sensor.blue_star_ac_compressor_runtime') | float / states('sensor.blue_star_ac_runtime') | float * 100) | round(1) }}
+        availability: "{{ has_value('sensor.blue_star_ac_compressor_runtime') and has_value('sensor.blue_star_ac_runtime') }}"
+
+      # Compressor speed. The MCU only sends it together with each compressor-counter tick (every 30 min of
+      # running on IE518TNUR, 15 min on IA318MXU) and cannot be polled live, so it is shown only while ticks
+      # keep arriving: 0 = off / idle / no tick yet. Use 1200 instead of 2100 for 15-min models.
+      - name: Blue Star AC compressor speed
+        unique_id: blue_star_ac_compressor_speed
+        unit_of_measurement: Hz
+        state_class: measurement
+        icon: mdi:sine-wave
+        state: >-
+          {% set k43 = states.sensor.blue_star_ac_k43_counter %}
+          {% if is_state('climate.blue_star_ac', 'off') or not k43 or (now() - k43.last_changed).total_seconds() > 2100 %}0
+          {% else %}{{ states('sensor.blue_star_ac_compressor_speed_last_tick') | int(0) }}{% endif %}
+        availability: "{{ has_value('climate.blue_star_ac') }}"
+
+      # Human-readable fan speed (handy for dashboards)
+      - name: Blue Star AC fan speed
+        unique_id: blue_star_ac_fan_speed
+        state: >-
+          {% set m = state_attr('climate.blue_star_ac', 'fan_mode') %}
+          {{ {'quiet':'Quiet','low':'Low','medium':'Medium','high':'High','Turbo':'Turbo','auto':'Auto'}.get(m, m) }}
+        icon: >-
+          {% set m = state_attr('climate.blue_star_ac', 'fan_mode') %}
+          {{ {'quiet':'mdi:fan-chevron-down','low':'mdi:fan-speed-1','medium':'mdi:fan-speed-2','high':'mdi:fan-speed-3','Turbo':'mdi:fan-plus','auto':'mdi:fan-auto'}.get(m, 'mdi:fan') }}
+        availability: "{{ has_value('climate.blue_star_ac') }}"
+
+  # Comfort Sleep raises the AC's real target +1 °C per hour for 2 h, but the reported setpoint never changes.
+  # This tracks when sleep (re)starts and shows the setpoint the AC is actually holding.
+  - trigger:
+      - trigger: state
+        entity_id: climate.blue_star_ac
+        attribute: preset_mode
+        to: sleep
+        id: start
+      - trigger: state
+        entity_id: climate.blue_star_ac
+      - trigger: time_pattern
+        minutes: /1
+    sensor:
+      - name: Blue Star AC effective setpoint
+        unique_id: blue_star_ac_effective_setpoint
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        icon: mdi:thermometer-auto
+        state: >-
+          {% set sp = state_attr('climate.blue_star_ac', 'temperature') | float(0) %}
+          {% set sleeping = is_state('climate.blue_star_ac', 'cool') and is_state_attr('climate.blue_star_ac', 'preset_mode', 'sleep') %}
+          {% set prev = this.attributes.sleep_start | default(none) %}
+          {% set start = now() if trigger.id == 'start' else (as_datetime(prev) if prev else none) %}
+          {% if sleeping and start %}{{ sp + [((now() - start).total_seconds() // 3600) | int, 2] | min }}{% else %}{{ sp }}{% endif %}
+        attributes:
+          sleep_start: >-
+            {% set prev = this.attributes.sleep_start | default(none) %}
+            {% if trigger.id == 'start' %}{{ now().isoformat() }}
+            {% elif is_state_attr('climate.blue_star_ac', 'preset_mode', 'sleep') %}{{ prev }}
+            {% else %}{{ none }}{% endif %}
+        availability: "{{ has_value('climate.blue_star_ac') }}"
+
+script:
+  # Example quick action. Every write makes the AC beep, so only send what differs.
+  blue_star_ac_26_vane_top:
+    alias: Blue Star AC · 26 °C, vane top
+    icon: mdi:arrow-up-bold
+    mode: single
+    sequence:
+      - if:
+          - condition: state
+            entity_id: climate.blue_star_ac
+            state: "off"
+        then:
+          - action: climate.set_hvac_mode
+            target: {entity_id: climate.blue_star_ac}
+            data: {hvac_mode: cool}
+          - delay: "00:00:02"
+      - if:
+          - condition: template
+            value_template: "{{ state_attr('climate.blue_star_ac', 'temperature') | float(0) != 26 }}"
+        then:
+          - action: climate.set_temperature
+            target: {entity_id: climate.blue_star_ac}
+            data: {temperature: 26}
+          - delay: "00:00:01"
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('select.blue_star_ac_vane_position', '1 (top)') }}"
+        then:
+          - action: select.select_option
+            target: {entity_id: select.blue_star_ac_vane_position}
+            data: {option: "1 (top)"}

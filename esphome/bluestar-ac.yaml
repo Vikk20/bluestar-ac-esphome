@@ -1,0 +1,342 @@
+# Blue Star "smart ready" split AC -> ESPHome, via the AC's 4-pin Wi-Fi port (Tuya MCU serial, 9600 8N1).
+# The bluestar_ac component speaks the serial protocol itself (the stock `tuya:` component stalls at init).
+# Protocol reference: docs/PROTOCOL.md   Wiring + gotchas: README.md
+#
+# Wiring (ESP32-C3 SuperMini):
+#   R_WIFI (AC TX, 5V) -> 2x10k in parallel -> GPIO3, 10k GPIO3 -> GND
+#   T_WIFI (AC RX)     -> GPIO4
+#   GND -> GND, 5V -> 5V   (never with USB plugged in at the same time)
+
+substitutions:
+  name: bluestar-ac
+  friendly_name: Blue Star AC
+  # Compressor-hours counter (k43) units differ by model:
+  #   2.0 = one tick per 30 min of compressor running (IE518TNUR, display board MD50BS)
+  #   4.0 = one tick per 15 min (IA318MXU)
+  # If "compressor hours" ends up larger than "runtime", your model needs the other value.
+  compressor_ticks_per_hour: "2.0"
+  tx_pin: GPIO4    # -> T_WIFI
+  rx_pin: GPIO3    # <- R_WIFI via divider
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG   # keep UART0 free for the AC
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret ac_api_key
+  actions:
+    # Developer Tools -> Actions -> esphome.bluestar_ac_send_record (key "15", value "1")
+    - action: send_record
+      variables:
+        key: string
+        value: string
+      then:
+        - lambda: id(ac).send_record(key, value);
+    # Raw Tuya frame for debugging: cmd 1, payload "" -> 55 AA 00 01 00 00 00
+    - action: send_frame
+      variables:
+        cmd: int
+        payload: string
+      then:
+        - lambda: |-
+            std::vector<uint8_t> p;
+            for (size_t i = 0; i + 1 < payload.size(); i += 2)
+              p.push_back(strtol(payload.substr(i, 2).c_str(), nullptr, 16));
+            id(ac).send_frame(cmd, p);
+
+debug:
+  update_interval: 1h
+
+ota:
+  - platform: esphome
+    password: !secret ac_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  output_power: 8.5dB    # SuperMini: higher TX power gives "Auth Expired" on join
+  power_save_mode: none  # light (default) sleeps the radio between beacons: 50-230 ms command lag
+  # Optional fixed IP:
+  # manual_ip:
+  #   static_ip: 192.168.1.50
+  #   gateway: 192.168.1.1
+  #   subnet: 255.255.255.0
+  ap:
+    ssid: ${name}-setup
+    password: !secret ac_ap_password
+
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# Optional: stream every log line to a syslog/UDP listener for long-term logging (handy for decoding
+# unknown keys over days). tools/ac_syslog.py is a minimal receiver.
+# udp:
+#   addresses: [192.168.1.10]
+# syslog:
+#   port: 5514
+
+uart:
+  id: ac_uart
+  tx_pin:
+    number: ${tx_pin}
+    drive_strength: 40mA   # AC input on T_WIFI is a heavy load
+  rx_pin: ${rx_pin}
+  baud_rate: 9600
+
+climate:
+  - platform: bluestar_ac
+    id: ac
+    name: None
+    uart_id: ac_uart
+    on_record:
+      - lambda: |-
+          auto hex = [&](const std::string &s) -> long { return strtol(s.c_str(), nullptr, 16); };
+          if (key == "15") {
+            bool on = value == "1";
+            id(display_light).publish_state(on);
+            // An ESP reboot glitches T_WIFI and the AC drops its display light without reporting it;
+            // the first state dump after boot restores the last known light state.
+            if (id(light_check_pending)) {
+              id(light_check_pending) = false;
+              if (!on && id(light_wanted)) id(ac).send_record("15", "1");
+            } else {
+              id(light_wanted) = on;
+            }
+          } else if (key == "55") {
+            static const char *const names[] = {"Normal", "100%", "80%", "60%", "40%"};
+            long v = hex(value);
+            if (v >= 0 && v <= 4) id(convertible).publish_state(names[v]);
+          } else if (key == "05") {
+            static const char *const names[] = {"Swing", "1 (top)", "2", "3", "4", "5 (bottom)", "Off"};
+            long v = hex(value);
+            if (v >= 0 && v <= 6) id(vane).publish_state(names[v]);
+          } else if (key == "58") {
+            id(mute).publish_state(value == "1");
+          } else if (key == "13") {
+            static const char *const names[] = {"Off", "Autumn", "Summer", "Monsoon"};
+            long v = hex(value);
+            if (v >= 0 && v <= 3) id(climate_preset).publish_state(names[v]);
+          } else if (key == "09") {
+            id(timer_on).publish_state(hex(value));
+          } else if (key == "10") {
+            id(timer_off).publish_state(hex(value));
+          } else if (key == "62") {
+            id(outdoor_temp).publish_state(hex(value) / 10.0f);
+          } else if (key == "00" && value.size() >= 90) {
+            // State dump carries the counters: k43 pos 39-42, k44 pos 43-50, k60 pos 86-89
+            id(k43).publish_state(hex(value.substr(39, 4)));
+            id(k59).publish_state(hex(value.substr(39, 4)));
+            id(compressor_hours).publish_state(hex(value.substr(39, 4)) / ${compressor_ticks_per_hour}f);
+            id(runtime_hours).publish_state(hex(value.substr(43, 8)) / 4.0f);
+            id(k60).publish_state(hex(value.substr(86, 4)));
+          } else if (key == "99") {
+            id(room_temp).publish_state(hex(value) / 10.0f);
+          } else if (key == "44") {
+            id(runtime_hours).publish_state(hex(value) / 4.0f);
+          } else if (key == "24" && value.size() == 6) {
+            // [A][LE16 counter]: A = compressor stat latched at each k43 step (38/40/45, 55 in turbo: inverter Hz?),
+            // counter = k43 - 0x21
+            id(k24_a).publish_state(hex(value.substr(0, 2)));
+            id(k24_count).publish_state(hex(value.substr(4, 2) + value.substr(2, 2)));
+          } else if (key == "25") {
+            id(k25).publish_state(hex(value));
+          } else if (key == "43") {
+            id(k43).publish_state(hex(value));
+            id(compressor_hours).publish_state(hex(value) / ${compressor_ticks_per_hour}f);
+          } else if (key == "59") {
+            id(k59).publish_state(hex(value));
+          } else if (key == "60") {
+            id(k60).publish_state(hex(value));
+          }
+          id(last_record).publish_state(key + "=" + value);
+
+globals:
+  - id: light_wanted
+    type: bool
+    restore_value: true
+    initial_value: "true"
+  - id: light_check_pending
+    type: bool
+    initial_value: "true"
+
+switch:
+  - platform: template
+    id: mute
+    name: Mute
+    icon: mdi:volume-off
+    entity_category: config
+    turn_on_action:
+      - lambda: id(ac).send_record("58", "1");
+    turn_off_action:
+      - lambda: id(ac).send_record("58", "0");
+  - platform: template
+    id: display_light
+    name: Display light
+    icon: mdi:led-on
+    entity_category: config
+    turn_on_action:
+      - lambda: id(ac).send_record("15", "1");
+    turn_off_action:
+      - lambda: id(ac).send_record("15", "0");
+
+button:
+  - platform: template
+    name: Reconnect AC
+    icon: mdi:connection
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(ac).handshake();
+  - platform: restart
+    name: Restart
+    entity_category: diagnostic
+
+select:
+  - platform: template
+    id: convertible
+    name: Convertible mode
+    icon: mdi:gauge
+    options: ["Normal", "100%", "80%", "60%", "40%"]
+    set_action:
+      - lambda: |-
+          auto idx = id(convertible).index_of(x);
+          if (idx.has_value()) id(ac).send_record("55", to_string(*idx));
+  # Remote Mode+Eco "Climate" presets (k13): Monsoon dry/24/Low, Autumn cool/26/Mid, Summer cool/24/Turbo
+  - platform: template
+    id: climate_preset
+    name: Season mode
+    icon: mdi:weather-partly-rainy
+    options: ["Off", "Autumn", "Summer", "Monsoon"]
+    set_action:
+      - lambda: |-
+          auto idx = id(climate_preset).index_of(x);
+          if (idx.has_value()) id(ac).send_record("13", to_string(*idx));
+  - platform: template
+    id: vane
+    name: Vane position
+    icon: mdi:arrow-up-down
+    options: ["Swing", "1 (top)", "2", "3", "4", "5 (bottom)", "Off"]
+    set_action:
+      - lambda: |-
+          auto idx = id(vane).index_of(x);
+          if (idx.has_value()) id(ac).send_record("05", to_string(*idx));
+
+sensor:
+  - platform: template
+    # k62: only sent when asked (writing 62=0, which beeps); constant 23.5 so far, not outdoor ambient
+    id: outdoor_temp
+    name: k62 temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  - platform: template
+    id: runtime_hours
+    name: Runtime
+    unit_of_measurement: h
+    device_class: duration
+    state_class: total_increasing
+    accuracy_decimals: 2
+    entity_category: diagnostic
+  - platform: template
+    id: room_temp
+    name: Room temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  # k43: +1 per 30 min of compressor running (only while on, on k44's 15-min grid)
+  - platform: template
+    id: compressor_hours
+    name: Compressor runtime
+    icon: mdi:heat-pump
+    unit_of_measurement: h
+    device_class: duration
+    state_class: total_increasing
+    accuracy_decimals: 1
+    entity_category: diagnostic
+  # Remote timers, reported as minutes from now (0 = not set). Clock lives in the remote only.
+  - platform: template
+    id: timer_on
+    name: On-timer
+    unit_of_measurement: min
+    icon: mdi:timer-play
+    accuracy_decimals: 0
+  - platform: template
+    id: timer_off
+    name: Off-timer
+    unit_of_measurement: min
+    icon: mdi:timer-stop
+    accuracy_decimals: 0
+  # Undecoded counters/stats, kept for history so they can be worked out (see PROTOCOL.md)
+  - platform: template
+    id: k24_a
+    name: Compressor speed (last tick)
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: measurement
+  - platform: template
+    id: k24_count
+    name: k24 compressor periods
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+  - platform: template
+    id: k25
+    name: k25 per-period value
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: measurement
+  - platform: template
+    id: k43
+    name: k43 counter
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+  - platform: template
+    id: k59
+    name: k59 counter
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+  - platform: template
+    id: k60
+    name: k60 counter
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+  - platform: uptime
+    name: Uptime
+    entity_category: diagnostic
+  - platform: wifi_signal
+    name: Wi-Fi signal
+    update_interval: 60s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: Reset reason
+  - platform: template
+    id: last_record
+    name: Last record
+    icon: mdi:code-braces
+    entity_category: diagnostic
+
