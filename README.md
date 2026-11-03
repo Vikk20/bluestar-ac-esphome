@@ -101,6 +101,10 @@ Where to find the port: on the **indoor unit's display board**, behind the front
 the inside of the cover shows it (*Wi-Fi → display board*, top right of the third photo above). On "smart ready"
 units the 4-pin header is empty; this is where the ESP plugs in.
 
+<p align="center"><img src="docs/images/display-board-wifi-port.jpg" width="70%" alt="Megmeet MD50BS display board: the empty 4-pin R_WIFI T_WIFI GND 5V header (CN2) sits below the 8-pin cable connector"></p>
+<p align="center"><sub>Megmeet MD50BS display board (removed from the unit). The ESP plugs into the empty 4-pin
+<code>R_WIFI / T_WIFI / GND / 5V</code> header on the right, below the 8-pin main cable.</sub></p>
+
 > ⚠️ **Mains voltage is present inside the indoor unit.** Switch the AC off at the breaker before opening it. You
 > are only touching the low-voltage display board, but be careful anyway. Opening the unit may affect your
 > warranty.
